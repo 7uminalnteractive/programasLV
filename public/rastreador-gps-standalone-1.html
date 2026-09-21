@@ -1,0 +1,706 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Rastreador GPS</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📍</text></svg>">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<style>
+  :root{
+    --bg:#f6f7f9; --card:#ffffff; --text:#14171c; --muted:#6b7280;
+    --accent:#2563eb; --accent-2:#1d4ed8; --danger:#dc2626; --ok:#16a34a; --warn:#d97706;
+    --line:#e5e7eb; --shadow:0 8px 30px rgba(0,0,0,.12);
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --bg:#0f1115; --card:#1a1d24; --text:#f3f4f6; --muted:#9ca3af;
+      --accent:#3b82f6; --accent-2:#60a5fa; --danger:#f87171; --ok:#4ade80; --warn:#fbbf24;
+      --line:#2a2f3a; --shadow:0 8px 30px rgba(0,0,0,.5);
+    }
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0}
+  body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;overflow:hidden}
+  #map{position:absolute;inset:0;background:var(--bg)}
+  .leaflet-control-attribution{font-size:9px}
+  /* no escuro: inverte o mapa claro do OpenStreetMap (não exige chave) */
+  @media (prefers-color-scheme: dark){
+    .leaflet-tile-pane{filter:invert(1) hue-rotate(180deg) brightness(.92) contrast(.9) saturate(.8)}
+  }
+
+  .panel{
+    position:absolute;left:12px;right:12px;bottom:calc(12px + env(safe-area-inset-bottom,0px));
+    z-index:1000;max-width:540px;margin:0 auto;background:var(--card);border:1px solid var(--line);
+    border-radius:20px;box-shadow:var(--shadow);padding:14px;max-height:64vh;overflow-y:auto;
+  }
+  .top{
+    position:absolute;z-index:1000;top:calc(12px + env(safe-area-inset-top,0px));left:12px;right:12px;
+    max-width:540px;margin:0 auto;display:flex;align-items:center;gap:10px;background:var(--card);
+    border:1px solid var(--line);border-radius:999px;padding:8px 14px;box-shadow:var(--shadow);font-size:13px;
+  }
+  .dot{width:10px;height:10px;border-radius:50%;background:var(--muted);flex:none}
+  .dot.on{background:var(--ok);animation:pulse 1.6s infinite}
+  .dot.err{background:var(--danger)}
+  .dot.share{background:var(--warn)}
+  @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(22,163,74,.6)}70%{box-shadow:0 0 0 10px rgba(22,163,74,0)}100%{box-shadow:0 0 0 0 rgba(22,163,74,0)}}
+  #status{flex:1;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+  .tabs{display:flex;gap:6px;margin-bottom:12px;background:var(--bg);padding:4px;border-radius:12px}
+  .tab{flex:1;background:transparent;color:var(--muted);padding:8px 6px;font-size:13px;border-radius:9px}
+  .tab:hover{background:transparent;color:var(--text)}
+  .tab.active{background:var(--card);color:var(--text);box-shadow:0 1px 3px rgba(0,0,0,.15)}
+  .view{display:none}.view.active{display:block}
+
+  .stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px}
+  .stat{background:var(--bg);border-radius:14px;padding:10px 8px;text-align:center}
+  .stat b{display:block;font-size:18px;font-variant-numeric:tabular-nums}
+  .stat span{font-size:11px;color:var(--muted)}
+
+  .row{display:flex;gap:8px}.row + .row{margin-top:8px}
+  button{font:inherit;font-weight:600;font-size:15px;border:0;cursor:pointer;border-radius:14px;padding:12px 14px;flex:1;background:var(--accent);color:#fff;transition:transform .05s,background .15s}
+  button:hover{background:var(--accent-2)}
+  button:active{transform:scale(.98)}
+  button.stop{background:var(--danger)}
+  button.ghost{background:var(--bg);color:var(--text);border:1px solid var(--line)}
+  button.ghost:hover{background:var(--line)}
+  button.small{padding:8px 10px;font-size:13px;flex:0 0 auto}
+  button:disabled{opacity:.5;cursor:not-allowed}
+
+  .me,.other{width:22px;height:22px;border-radius:50%;border:3px solid #fff}
+  .me{background:var(--accent);animation:meP 2s infinite}
+  .other{background:var(--warn);animation:otP 2s infinite}
+  @keyframes meP{0%{box-shadow:0 0 0 0 rgba(37,99,235,.5),0 2px 8px rgba(0,0,0,.4)}70%{box-shadow:0 0 0 16px rgba(37,99,235,0),0 2px 8px rgba(0,0,0,.4)}100%{box-shadow:0 0 0 0 rgba(37,99,235,0),0 2px 8px rgba(0,0,0,.4)}}
+  @keyframes otP{0%{box-shadow:0 0 0 0 rgba(217,119,6,.5),0 2px 8px rgba(0,0,0,.4)}70%{box-shadow:0 0 0 16px rgba(217,119,6,0),0 2px 8px rgba(0,0,0,.4)}100%{box-shadow:0 0 0 0 rgba(217,119,6,0),0 2px 8px rgba(0,0,0,.4)}}
+  .start-pin{width:14px;height:14px;border-radius:50%;background:var(--ok);border:3px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,.4)}
+  .hint{margin:10px 0 0;font-size:12px;color:var(--muted);text-align:center;line-height:1.4}
+
+  .box{background:var(--bg);border-radius:14px;padding:12px;margin-bottom:10px;font-size:13px;line-height:1.45}
+  .box b{font-size:14px}
+  .link{display:flex;gap:6px;align-items:center;margin-top:8px}
+  .link input{flex:1;min-width:0;font:inherit;font-size:12px;padding:9px 10px;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--text)}
+
+  .list{display:flex;flex-direction:column;gap:8px}
+  .item{background:var(--bg);border-radius:14px;padding:10px 12px;display:flex;align-items:center;gap:8px}
+  .item .info{flex:1;min-width:0}
+  .item .info b{display:block;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .item .info span{font-size:12px;color:var(--muted)}
+  .empty{text-align:center;color:var(--muted);font-size:13px;padding:14px 4px}
+
+  /* proximidade */
+  .prox{border-radius:16px;padding:14px;text-align:center;margin-bottom:10px;background:var(--bg);border:2px solid var(--line);transition:background .3s,border-color .3s}
+  .prox .big{font-size:34px;font-weight:800;font-variant-numeric:tabular-nums;line-height:1.1}
+  .prox .lbl{font-size:13px;color:var(--muted);margin-top:2px}
+  .prox .bar{height:8px;border-radius:99px;background:var(--line);margin-top:10px;overflow:hidden}
+  .prox .bar i{display:block;height:100%;width:0;border-radius:99px;background:var(--muted);transition:width .4s,background .3s}
+  .prox.p-perto{border-color:var(--ok)} .prox.p-perto .bar i{background:var(--ok)}
+  .prox.p-medio{border-color:var(--warn)} .prox.p-medio .bar i{background:var(--warn)}
+  .prox.p-longe{border-color:var(--danger)} .prox.p-longe .bar i{background:var(--danger)}
+  .badge{display:inline-block;font-size:12px;font-weight:700;padding:3px 10px;border-radius:99px;background:var(--line);color:var(--text);margin-top:6px}
+  audio{display:none}
+</style>
+</head>
+<body>
+
+<div id="map"></div>
+
+<div class="top">
+  <span class="dot" id="dot"></span>
+  <span id="status">Toque em Iniciar para ativar o GPS</span>
+</div>
+
+<div class="panel" id="panel">
+  <!-- =========== MODO DONO (quem compartilha) =========== -->
+  <div id="app">
+    <div class="tabs" id="tabs">
+      <button class="tab active" data-v="track">Rastrear</button>
+      <button class="tab" data-v="share">Compartilhar</button>
+      <button class="tab" data-v="saved">Salvos</button>
+    </div>
+
+    <div class="view active" id="v-track">
+      <div class="stats">
+        <div class="stat"><b id="dist">0,00 km</b><span>Distância</span></div>
+        <div class="stat"><b id="speed">0 km/h</b><span>Velocidade</span></div>
+        <div class="stat"><b id="time">00:00</b><span>Tempo</span></div>
+      </div>
+      <div class="row">
+        <button id="toggle">Iniciar rastreamento</button>
+        <button id="center" class="ghost small" title="Centralizar" disabled>⌖</button>
+        <button id="clear" class="ghost small" title="Limpar trajeto" disabled>Limpar</button>
+      </div>
+      <div class="row">
+        <button id="save" class="ghost" disabled>💾 Salvar trajeto</button>
+        <button id="gpx" class="ghost" disabled>⬇ Exportar GPX</button>
+      </div>
+      <p class="hint">Toque em Iniciar e permita o acesso à localização.</p>
+    </div>
+
+    <div class="view" id="v-share">
+      <div class="box">
+        <b>Compartilhar ao vivo</b><br>
+        Gera um link direto entre os aparelhos: <b>posição, trajeto e áudio</b>. Nada fica guardado em servidor.
+        <div class="row" style="margin-top:10px">
+          <button id="share-toggle">Iniciar compartilhamento</button>
+        </div>
+        <div class="link" id="share-link-row" style="display:none">
+          <input id="share-link" readonly>
+          <button class="ghost small" id="share-copy">Copiar</button>
+        </div>
+        <div class="row" id="share-native-row" style="display:none;margin-top:8px">
+          <button class="ghost" id="share-native">Enviar link…</button>
+        </div>
+        <p class="hint" id="share-viewers" style="display:none;margin-top:8px"></p>
+      </div>
+      <div class="box" id="host-audio-box" style="display:none">
+        <b>🎙 Áudio</b><br>
+        <span style="color:var(--muted)">O áudio só é enviado quando quem assiste pede e você aceita.</span>
+        <div class="row" style="margin-top:8px"><button class="ghost" id="host-mic">Permitir áudio (microfone)</button></div>
+      </div>
+      <p class="hint">Mantenha esta aba aberta e a tela ligada. Se fechar, o link para de funcionar. Quem tiver o link vê sua localização: envie só para quem você confia.</p>
+    </div>
+
+    <div class="view" id="v-saved">
+      <div class="list" id="saved-list"></div>
+      <p class="hint">Trajetos salvos ficam só neste aparelho, neste navegador.</p>
+    </div>
+  </div>
+</div>
+
+<audio id="remote-audio" autoplay playsinline></audio>
+
+<script>
+(function(){
+  var $ = function(id){ return document.getElementById(id); };
+  function esc(s){ return String(s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];}); }
+  function p2(n){ return (n<10?'0':'')+n; }
+  function fmtTime(s){ s=Math.floor(s); var h=Math.floor(s/3600),m=Math.floor((s%3600)/60),x=s%60; return h>0?h+':'+p2(m)+':'+p2(x):p2(m)+':'+p2(x); }
+  function fmtKm(m){ return (m/1000).toFixed(2).replace('.',',') + ' km'; }
+  function fmtDist(m){ return m<1000 ? Math.round(m)+' m' : (m/1000).toFixed(2).replace('.',',')+' km'; }
+
+  /* ---------- Mapa (OpenStreetMap: não exige chave) ---------- */
+  var map = L.map('map',{ zoomControl:false }).setView([-14.235,-51.925],4);
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom:19, attribution:'© OpenStreetMap' }).addTo(map);
+
+  var meIcon = L.divIcon({className:'',html:'<div class="me"></div>',iconSize:[22,22],iconAnchor:[11,11]});
+  var otherIcon = L.divIcon({className:'',html:'<div class="other"></div>',iconSize:[22,22],iconAnchor:[11,11]});
+  var startIcon = L.divIcon({className:'',html:'<div class="start-pin"></div>',iconSize:[14,14],iconAnchor:[7,7]});
+
+  var dot=$('dot'), statusEl=$('status');
+  function setStatus(t,s){ statusEl.textContent=t; dot.className='dot'+(s?' '+s:''); }
+
+  /* ---------- Distância entre dois pontos (Haversine) ---------- */
+  function haversine(a,b,c,d){
+    var R=6371000, r=Math.PI/180, dLat=(c-a)*r, dLng=(d-b)*r;
+    var x=Math.sin(dLat/2)*Math.sin(dLat/2)+Math.cos(a*r)*Math.cos(c*r)*Math.sin(dLng/2)*Math.sin(dLng/2);
+    return 2*R*Math.asin(Math.sqrt(x));
+  }
+
+  if (typeof Peer === 'undefined'){
+    setStatus('Não foi possível carregar o módulo de conexão (PeerJS). Verifique a internet.','err');
+  }
+
+  /* ---------- ID público do link (dono) ---------- */
+  function makeCode(){
+    var a='abcdefghjkmnpqrstuvwxyz23456789', s='', buf=new Uint8Array(20);
+    crypto.getRandomValues(buf);
+    for (var i=0;i<buf.length;i++) s+=a[buf[i]%a.length];
+    return 'gpsrast-'+s;
+  }
+
+  var PEER_OPTS = {
+    debug: 0,
+    config: { iceServers:[
+      { urls:'stun:stun.l.google.com:19302' },
+      { urls:'stun:stun1.l.google.com:19302' },
+      { urls:'stun:global.stun.twilio.com:3478' }
+    ]}
+  };
+
+  /* ---------- Modo espectador? ---------- */
+  var m = /[#&]ver=(gpsrast-[a-z0-9]{20})/.exec(location.hash || '');
+  if (m) { startViewer(m[1]); return; }
+
+  /* ============================================================
+     MODO DONO — abas
+  ============================================================ */
+  var tabs = document.querySelectorAll('.tab');
+  function showTab(name){
+    tabs.forEach(function(t){ t.classList.toggle('active', t.dataset.v===name); });
+    ['track','share','saved'].forEach(function(v){ $('v-'+v).classList.toggle('active', v===name); });
+    if (name==='saved') renderSaved();
+  }
+  tabs.forEach(function(t){ t.addEventListener('click',function(){ showTab(t.dataset.v); }); });
+
+  /* ---------- Rastreamento ---------- */
+  var toggle=$('toggle'), centerBtn=$('center'), clearBtn=$('clear'), saveBtn=$('save'), gpxBtn=$('gpx');
+  var watchId=null, marker=null, accCircle=null, startMarker=null;
+  var line = L.polyline([],{color:'#2563eb',weight:5,opacity:.9,lineJoin:'round'}).addTo(map);
+  var following=true, totalM=0, lastPt=null, startTs=0, timerId=null, elapsedBefore=0, points=[];
+  var lastFix=null;   // {lat,lng,acc}
+  map.on('dragstart',function(){ following=false; });
+
+  function elapsedNow(){ return elapsedBefore + (timerId ? (Date.now()-startTs)/1000 : 0); }
+  function tick(){ $('time').textContent = fmtTime(elapsedNow()); }
+  function refreshButtons(){
+    var has = points.length > 1;
+    saveBtn.disabled = !has; gpxBtn.disabled = !has;
+    clearBtn.disabled = !points.length && !marker;
+    centerBtn.disabled = !marker;
+  }
+  function addPoint(c,ts){ points.push({ lat:c.latitude, lng:c.longitude, t:ts, ele:(c.altitude!=null && !isNaN(c.altitude)) ? c.altitude : null }); }
+
+  function onPos(pos){
+    var c=pos.coords, ll=[c.latitude,c.longitude];
+    lastFix = { lat:c.latitude, lng:c.longitude, acc:Math.round(c.accuracy) };
+    if (!marker){
+      marker = L.marker(ll,{icon:meIcon,zIndexOffset:1000}).addTo(map);
+      accCircle = L.circle(ll,{radius:c.accuracy,color:'#2563eb',weight:1,fillOpacity:.08}).addTo(map);
+      map.setView(ll,17);
+    } else { marker.setLatLng(ll); accCircle.setLatLng(ll).setRadius(c.accuracy); }
+
+    if (c.accuracy <= 50){
+      if (lastPt){
+        var d = haversine(lastPt[0],lastPt[1],ll[0],ll[1]);
+        if (d >= 3){ totalM+=d; lastPt=ll; line.addLatLng(ll); addPoint(c,pos.timestamp); }
+      } else {
+        lastPt=ll; line.addLatLng(ll);
+        startMarker = L.marker(ll,{icon:startIcon}).addTo(map);
+        addPoint(c,pos.timestamp);
+      }
+    }
+    $('dist').textContent = fmtKm(totalM);
+    var v = (c.speed!=null && !isNaN(c.speed)) ? c.speed*3.6 : 0;
+    $('speed').textContent = Math.round(v)+' km/h';
+    if (following) map.panTo(ll,{animate:true});
+    setStatus('Rastreando · precisão ±'+Math.round(c.accuracy)+' m'+(sharing?' · compartilhando':''), sharing?'share':'on');
+    broadcast();
+    refreshButtons();
+  }
+
+  function onErr(e){
+    var msg = {1:'Permissão negada. Libere a localização nas configurações do navegador.',
+               2:'Localização indisponível. Verifique se o GPS está ligado.',
+               3:'Tempo esgotado ao obter localização. Tentando de novo…'}[e.code] || 'Erro ao obter localização.';
+    setStatus(msg,'err');
+    if (e.code===1) stop(true);
+  }
+
+  function start(){
+    if (!('geolocation' in navigator)){ setStatus('Seu navegador não suporta geolocalização.','err'); return; }
+    if (!window.isSecureContext){ setStatus('O GPS só funciona em https. Abra o arquivo por um endereço https.','err'); return; }
+    setStatus('Aguardando permissão do GPS…');
+    following=true; startTs=Date.now();
+    timerId=setInterval(tick,1000);
+    watchId=navigator.geolocation.watchPosition(onPos,onErr,{enableHighAccuracy:true,maximumAge:0,timeout:20000});
+    toggle.textContent='Parar rastreamento'; toggle.classList.add('stop');
+    requestWakeLock();
+  }
+  function stop(silent){
+    if (watchId!==null){ navigator.geolocation.clearWatch(watchId); watchId=null; }
+    if (timerId){ clearInterval(timerId); timerId=null; elapsedBefore += (Date.now()-startTs)/1000; }
+    toggle.textContent='Iniciar rastreamento'; toggle.classList.remove('stop');
+    if (!silent) setStatus('Rastreamento pausado','');
+    $('speed').textContent='0 km/h';
+    if (!sharing) releaseWakeLock();
+    refreshButtons();
+  }
+  function clearAll(){
+    stop(true);
+    if (sharing) stopShare(true);
+    line.setLatLngs([]);
+    if (marker){ map.removeLayer(marker); marker=null; }
+    if (accCircle){ map.removeLayer(accCircle); accCircle=null; }
+    if (startMarker){ map.removeLayer(startMarker); startMarker=null; }
+    totalM=0; lastPt=null; elapsedBefore=0; points=[]; lastFix=null;
+    $('dist').textContent='0,00 km'; $('time').textContent='00:00'; $('speed').textContent='0 km/h';
+    refreshButtons();
+    setStatus('Trajeto limpo. Toque em Iniciar para começar de novo.','');
+  }
+  toggle.addEventListener('click',function(){ watchId===null ? start() : stop(); });
+  centerBtn.addEventListener('click',function(){ following=true; if(marker) map.setView(marker.getLatLng(),Math.max(map.getZoom(),16)); });
+  clearBtn.addEventListener('click',clearAll);
+
+  /* ---------- Manter a tela ligada ---------- */
+  var wakeLock=null;
+  function requestWakeLock(){
+    if (!('wakeLock' in navigator)) return;
+    navigator.wakeLock.request('screen').then(function(l){ wakeLock=l; l.addEventListener('release',function(){ wakeLock=null; }); }).catch(function(){});
+  }
+  function releaseWakeLock(){ if (wakeLock){ wakeLock.release().catch(function(){}); wakeLock=null; } }
+  document.addEventListener('visibilitychange',function(){
+    if (document.visibilityState==='visible' && (watchId!==null || sharing) && !wakeLock) requestWakeLock();
+  });
+
+  /* ---------- GPX ---------- */
+  function buildGpx(name, pts){
+    var o=['<?xml version="1.0" encoding="UTF-8"?>',
+      '<gpx version="1.1" creator="Rastreador GPS" xmlns="http://www.topografix.com/GPX/1/1">',
+      '<metadata><name>'+esc(name)+'</name></metadata>','<trk><name>'+esc(name)+'</name><trkseg>'];
+    pts.forEach(function(p){
+      var s='<trkpt lat="'+p.lat.toFixed(7)+'" lon="'+p.lng.toFixed(7)+'">';
+      if (p.ele!=null) s+='<ele>'+p.ele.toFixed(1)+'</ele>';
+      s+='<time>'+new Date(p.t).toISOString()+'</time></trkpt>'; o.push(s);
+    });
+    o.push('</trkseg></trk></gpx>'); return o.join('\n');
+  }
+  function defaultName(ts){ var d=new Date(ts||Date.now()); return 'Trajeto '+p2(d.getDate())+'/'+p2(d.getMonth()+1)+'/'+d.getFullYear()+' '+p2(d.getHours())+':'+p2(d.getMinutes()); }
+  function fileSafe(s){ return s.replace(/[^a-zA-Z0-9_-]+/g,'-').replace(/^-+|-+$/g,'') || 'trajeto'; }
+  function downloadGpx(name, pts){
+    if (pts.length<2) return;
+    var blob = new Blob([buildGpx(name,pts)],{type:'application/gpx+xml'});
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = fileSafe(name)+'.gpx';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(function(){ URL.revokeObjectURL(a.href); },2000);
+    setStatus('GPX exportado.','on');
+  }
+  gpxBtn.addEventListener('click',function(){ downloadGpx(defaultName(points[0]&&points[0].t), points); });
+
+  /* ---------- Trajetos salvos (localStorage) ---------- */
+  var LS='rastreador_gps_trajetos_v1';
+  function loadTracks(){ try{ return JSON.parse(localStorage.getItem(LS)||'[]'); }catch(e){ return []; } }
+  function storeTracks(a){ try{ localStorage.setItem(LS,JSON.stringify(a)); return true; }catch(e){ return false; } }
+  function encodePts(pts){ return pts.map(function(p){ return [+p.lat.toFixed(6),+p.lng.toFixed(6),p.t,p.ele==null?null:+p.ele.toFixed(1)]; }); }
+  function decodePts(a){ return (a||[]).map(function(r){ return {lat:r[0],lng:r[1],t:r[2],ele:r[3]}; }); }
+
+  saveBtn.addEventListener('click',function(){
+    if (points.length<2) return;
+    var all = loadTracks();
+    all.unshift({ id:Date.now(), name:defaultName(points[0].t), distance:Math.round(totalM), duration:Math.round(elapsedNow()), pts:encodePts(points) });
+    if (storeTracks(all)) setStatus('Trajeto salvo em "Salvos".','on');
+    else setStatus('Sem espaço para salvar. Apague trajetos antigos.','err');
+  });
+  var viewLine=null;
+  function viewSaved(t){
+    var pts=decodePts(t.pts);
+    if (viewLine){ map.removeLayer(viewLine); viewLine=null; }
+    if (pts.length<2) return;
+    viewLine = L.polyline(pts.map(function(p){return [p.lat,p.lng];}),{color:'#9333ea',weight:5,opacity:.9}).addTo(map);
+    map.fitBounds(viewLine.getBounds(),{padding:[40,40]}); following=false;
+    setStatus('Mostrando: '+t.name,'');
+  }
+  function renderSaved(){
+    var list=$('saved-list'), all=loadTracks();
+    list.innerHTML='';
+    if (!all.length){ list.innerHTML='<div class="empty">Nenhum trajeto salvo ainda.</div>'; return; }
+    all.forEach(function(t){
+      var item=document.createElement('div'); item.className='item';
+      var info=document.createElement('div'); info.className='info';
+      var b=document.createElement('b'); b.textContent=t.name;
+      var s=document.createElement('span'); s.textContent=fmtKm(t.distance)+' · '+fmtTime(t.duration);
+      info.appendChild(b); info.appendChild(s);
+      var bV=document.createElement('button'); bV.className='ghost small'; bV.textContent='Ver';
+      var bG=document.createElement('button'); bG.className='ghost small'; bG.textContent='GPX';
+      var bD=document.createElement('button'); bD.className='ghost small'; bD.textContent='🗑';
+      bV.addEventListener('click',function(){ viewSaved(t); });
+      bG.addEventListener('click',function(){ downloadGpx(t.name,decodePts(t.pts)); });
+      bD.addEventListener('click',function(){
+        if (bD.dataset.sure!=='1'){ bD.dataset.sure='1'; bD.textContent='Apagar?'; setTimeout(function(){ bD.dataset.sure=''; bD.textContent='🗑'; },3000); return; }
+        storeTracks(loadTracks().filter(function(x){ return x.id!==t.id; })); renderSaved();
+      });
+      item.appendChild(info); item.appendChild(bV); item.appendChild(bG); item.appendChild(bD);
+      list.appendChild(item);
+    });
+  }
+
+  /* ============================================================
+     COMPARTILHAMENTO (dono = "host") — WebRTC via PeerJS
+  ============================================================ */
+  var sharing=false, hostPeer=null, hostCode=null, conns=[], micStream=null, lastSend=0, sendTimer=null;
+
+  function snapshot(){
+    var recent = points.length>800 ? points.slice(points.length-800) : points;
+    return {
+      t:'pos', ts:Date.now(),
+      lat: lastFix ? lastFix.lat : null, lng: lastFix ? lastFix.lng : null, acc: lastFix ? lastFix.acc : null,
+      dist:Math.round(totalM), dur:Math.round(elapsedNow()),
+      trail: recent.map(function(p){ return [+p.lat.toFixed(6), +p.lng.toFixed(6)]; })
+    };
+  }
+  function sendTo(c){ try{ if (c.open) c.send(snapshot()); }catch(e){} }
+  function broadcast(){
+    if (!sharing || !conns.length) return;
+    var now = Date.now();
+    if (now-lastSend < 2000){
+      if (!sendTimer) sendTimer = setTimeout(function(){ sendTimer=null; broadcast(); }, 2000-(now-lastSend));
+      return;
+    }
+    lastSend = now;
+    conns.forEach(sendTo);
+  }
+  function updateViewersLabel(){
+    var n = conns.filter(function(c){ return c.open; }).length;
+    var el = $('share-viewers'); el.style.display='block';
+    el.textContent = n===0 ? 'Aguardando alguém abrir o link…' : (n===1 ? '1 pessoa acompanhando agora' : n+' pessoas acompanhando agora');
+  }
+
+  function startShare(){
+    if (typeof Peer === 'undefined'){ setStatus('Módulo de conexão indisponível. Verifique a internet.','err'); return; }
+    hostCode = makeCode();
+    setStatus('Criando link…','share');
+    hostPeer = new Peer(hostCode, PEER_OPTS);
+
+    hostPeer.on('open', function(id){
+      sharing = true;
+      $('share-toggle').textContent='Parar compartilhamento'; $('share-toggle').classList.add('stop');
+      $('share-link').value = location.href.split('#')[0] + '#ver=' + id;
+      $('share-link-row').style.display='flex';
+      if (navigator.share) $('share-native-row').style.display='flex';
+      $('host-audio-box').style.display='block';
+      updateViewersLabel();
+      if (watchId===null) start();
+      requestWakeLock();
+      setStatus('Compartilhando ao vivo','share');
+    });
+
+    hostPeer.on('connection', function(c){
+      conns.push(c);
+      c.on('open', function(){ sendTo(c); updateViewersLabel(); });
+      c.on('data', function(msg){ if (msg && msg.t==='loc') onViewerLoc(c, msg); });
+      var drop=function(){ conns = conns.filter(function(x){ return x!==c; }); updateViewersLabel(); };
+      c.on('close', drop); c.on('error', drop);
+    });
+
+    // Espectador pede áudio: ele nos LIGA (call) e nós só respondemos se o dono aceitou o microfone
+    hostPeer.on('call', function(call){
+      if (!micStream){ try{ call.close(); }catch(e){} setStatus('Alguém pediu áudio. Toque em "Permitir áudio" na aba Compartilhar.','share'); return; }
+      call.answer(micStream);
+    });
+
+    hostPeer.on('error', function(err){
+      var t = err && err.type;
+      if (t==='unavailable-id'){ hostPeer.destroy(); hostPeer=null; startShare(); return; }
+      if (t==='network' || t==='server-error' || t==='socket-error' || t==='socket-closed'){
+        setStatus('Sem conexão com o serviço de sinalização. Verifique a internet.','err');
+      } else if (t==='browser-incompatible'){
+        setStatus('Este navegador não suporta o compartilhamento direto.','err');
+      } else { setStatus('Erro de conexão ('+(t||'desconhecido')+').','err'); }
+    });
+    hostPeer.on('disconnected', function(){
+      if (sharing && hostPeer && !hostPeer.destroyed){ try{ hostPeer.reconnect(); }catch(e){} }
+    });
+  }
+
+  function stopShare(silent){
+    sharing=false;
+    conns.forEach(function(c){ try{ c.send({t:'end'}); }catch(e){} try{ c.close(); }catch(e){} });
+    conns=[];
+    if (hostPeer){ try{ hostPeer.destroy(); }catch(e){} hostPeer=null; }
+    if (micStream){ micStream.getTracks().forEach(function(t){ t.stop(); }); micStream=null; }
+    if (sendTimer){ clearTimeout(sendTimer); sendTimer=null; }
+    $('share-toggle').textContent='Iniciar compartilhamento'; $('share-toggle').classList.remove('stop');
+    $('share-link-row').style.display='none'; $('share-native-row').style.display='none';
+    $('host-audio-box').style.display='none'; $('share-viewers').style.display='none';
+    $('host-mic').textContent='Permitir áudio (microfone)';
+    if (watchId===null) releaseWakeLock();
+    if (!silent) setStatus('Compartilhamento encerrado','');
+  }
+
+  $('share-toggle').addEventListener('click',function(){ sharing ? stopShare() : startShare(); });
+  $('share-copy').addEventListener('click',function(){
+    var inp=$('share-link'); inp.select();
+    var done=function(){ $('share-copy').textContent='Copiado!'; setTimeout(function(){ $('share-copy').textContent='Copiar'; },1500); };
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(inp.value).then(done,function(){ try{document.execCommand('copy');done();}catch(e){} });
+    else { try{document.execCommand('copy');done();}catch(e){} }
+  });
+  $('share-native').addEventListener('click',function(){
+    navigator.share({ title:'Minha localização ao vivo', text:'Acompanhe minha localização em tempo real:', url:$('share-link').value }).catch(function(){});
+  });
+
+  // Microfone do dono (só liga quando ele toca)
+  $('host-mic').addEventListener('click',function(){
+    var btn=$('host-mic');
+    if (micStream){
+      micStream.getTracks().forEach(function(t){ t.stop(); }); micStream=null;
+      btn.textContent='Permitir áudio (microfone)'; return;
+    }
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){ setStatus('Este navegador não permite acessar o microfone.','err'); return; }
+    navigator.mediaDevices.getUserMedia({ audio:{ echoCancellation:true, noiseSuppression:true }, video:false }).then(function(s){
+      micStream=s; btn.textContent='🎙 Áudio permitido (toque para desligar)';
+      setStatus('Microfone liberado. Quem estiver assistindo pode ouvir.','share');
+    }).catch(function(){ setStatus('Permissão do microfone negada.','err'); });
+  });
+
+  // Proximidade vista pelo dono (o espectador manda a localização dele de volta)
+  var viewerMarkers = {};
+  function onViewerLoc(c, msg){
+    if (msg.lat==null) return;
+    var ll=[msg.lat,msg.lng];
+    if (!viewerMarkers[c.peer]) viewerMarkers[c.peer]=L.marker(ll,{icon:otherIcon}).addTo(map);
+    else viewerMarkers[c.peer].setLatLng(ll);
+    if (lastFix){
+      var d=haversine(lastFix.lat,lastFix.lng,msg.lat,msg.lng);
+      setStatus('Compartilhando · a pessoa está a '+fmtDist(d), 'share');
+    }
+  }
+
+  window.addEventListener('pagehide',function(){ if (sharing) stopShare(true); });
+  refreshButtons();
+
+  /* ============================================================
+     MODO ESPECTADOR ("viewer")
+  ============================================================ */
+  function startViewer(code){
+    document.querySelector('.tabs') && (document.querySelector('.tabs').style.display='none');
+    $('panel').innerHTML =
+      '<div class="prox" id="prox"><div class="big" id="prox-big">–</div><div class="lbl" id="prox-lbl">Compartilhe sua localização para medir a distância</div>' +
+      '<div class="bar"><i id="prox-bar"></i></div><span class="badge" id="prox-badge" style="display:none"></span></div>' +
+      '<div class="stats">' +
+      '<div class="stat"><b id="w-dist">–</b><span>Percorrido</span></div>' +
+      '<div class="stat"><b id="w-time">–</b><span>Tempo</span></div>' +
+      '<div class="stat"><b id="w-age">–</b><span>Atualizado há</span></div></div>' +
+      '<div class="row"><button id="w-prox">📍 Medir distância até mim</button></div>' +
+      '<div class="row"><button id="w-audio" class="ghost">🎧 Ouvir áudio ao vivo</button></div>' +
+      '<div class="row"><button id="w-center" class="ghost">⌖ Centralizar nele(a)</button></div>' +
+      '<p class="hint" id="w-hint">Conectando…</p>';
+
+    var wLine=L.polyline([],{color:'#d97706',weight:5,opacity:.9}).addTo(map);
+    var wMarker=null, wFollow=true, firstFit=true, lastMsg=0, ended=false;
+    var hostFix=null, myFix=null, myMarker=null, geoId=null, peer=null, conn=null, audioCall=null, retry=0;
+    map.on('dragstart',function(){ wFollow=false; });
+    $('w-center').addEventListener('click',function(){ wFollow=true; if (wMarker) map.setView(wMarker.getLatLng(),Math.max(map.getZoom(),16)); });
+    setStatus('Conectando ao compartilhamento…','share');
+
+    setInterval(function(){
+      if (!lastMsg || ended) return;
+      var s=Math.max(0,Math.round((Date.now()-lastMsg)/1000));
+      $('w-age').textContent = s<60 ? s+' s' : Math.round(s/60)+' min';
+    },1000);
+
+    /* ----- proximidade ----- */
+    function renderProx(){
+      var box=$('prox'), big=$('prox-big'), lbl=$('prox-lbl'), bar=$('prox-bar'), badge=$('prox-badge');
+      if (!hostFix || !myFix){ return; }
+      var d = haversine(hostFix.lat,hostFix.lng,myFix.lat,myFix.lng);
+      // margem de erro: soma das precisões dos dois GPS
+      var err = (hostFix.acc||0) + (myFix.acc||0);
+      big.textContent = fmtDist(d);
+      lbl.textContent = 'até a pessoa · margem de erro ≈ ' + fmtDist(err);
+      var cls, txt;
+      if (d <= 25 || d <= err){ cls='p-perto'; txt='🟢 Muito perto'; }
+      else if (d <= 150){ cls='p-perto'; txt='🟢 Perto'; }
+      else if (d <= 600){ cls='p-medio'; txt='🟡 A alguns passos de distância'; }
+      else { cls='p-longe'; txt='🔴 Longe'; }
+      box.className='prox '+cls;
+      badge.style.display='inline-block'; badge.textContent=txt;
+      // barra: cheia = perto (escala até 1 km)
+      var pct = Math.max(4, Math.min(100, 100 - (d/1000)*100));
+      bar.style.width = pct+'%';
+    }
+
+    $('w-prox').addEventListener('click',function(){
+      if (geoId!==null){
+        navigator.geolocation.clearWatch(geoId); geoId=null; myFix=null;
+        $('w-prox').textContent='📍 Medir distância até mim';
+        if (myMarker){ map.removeLayer(myMarker); myMarker=null; }
+        $('prox-big').textContent='–'; $('prox-lbl').textContent='Compartilhe sua localização para medir a distância';
+        $('prox-badge').style.display='none'; $('prox-bar').style.width='0'; $('prox').className='prox';
+        return;
+      }
+      if (!('geolocation' in navigator)){ setStatus('Seu navegador não suporta geolocalização.','err'); return; }
+      $('w-prox').textContent='⏳ Obtendo sua localização…';
+      geoId = navigator.geolocation.watchPosition(function(pos){
+        myFix = { lat:pos.coords.latitude, lng:pos.coords.longitude, acc:Math.round(pos.coords.accuracy) };
+        var ll=[myFix.lat,myFix.lng];
+        if (!myMarker) myMarker=L.marker(ll,{icon:meIcon}).addTo(map); else myMarker.setLatLng(ll);
+        $('w-prox').textContent='📍 Parar de medir distância';
+        renderProx();
+        if (conn && conn.open){ try{ conn.send({t:'loc', lat:myFix.lat, lng:myFix.lng, acc:myFix.acc}); }catch(e){} }
+      }, function(e){
+        $('w-prox').textContent='📍 Medir distância até mim';
+        geoId=null;
+        setStatus(e.code===1 ? 'Permissão de localização negada.' : 'Não foi possível obter sua localização.','err');
+      }, { enableHighAccuracy:true, maximumAge:0, timeout:20000 });
+    });
+
+    /* ----- áudio ----- */
+    var audioEl = $('remote-audio');
+    $('w-audio').addEventListener('click',function(){
+      var btn=$('w-audio');
+      if (audioCall){
+        try{ audioCall.close(); }catch(e){} audioCall=null; audioEl.srcObject=null;
+        btn.textContent='🎧 Ouvir áudio ao vivo'; return;
+      }
+      if (!peer || !peer.open){ setStatus('Ainda conectando. Tente de novo em instantes.','err'); return; }
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){ setStatus('Este navegador não suporta áudio ao vivo.','err'); return; }
+      btn.textContent='⏳ Pedindo áudio…';
+      // O navegador exige uma "chamada" com mídia; enviamos um áudio mudo e só recebemos o do dono
+      var ctx = new (window.AudioContext||window.webkitAudioContext)();
+      var dest = ctx.createMediaStreamDestination();
+      var call = peer.call(code, dest.stream);
+      audioCall = call;
+      var got=false;
+      call.on('stream', function(remote){
+        got=true;
+        audioEl.srcObject = remote;
+        audioEl.play().catch(function(){});
+        btn.textContent='🔇 Parar de ouvir';
+        setStatus('Ouvindo áudio ao vivo','on');
+      });
+      call.on('close', function(){ audioCall=null; audioEl.srcObject=null; btn.textContent='🎧 Ouvir áudio ao vivo'; if(!got) setStatus('A pessoa ainda não liberou o áudio.','err'); });
+      call.on('error', function(){ audioCall=null; btn.textContent='🎧 Ouvir áudio ao vivo'; setStatus('Falha ao ouvir o áudio.','err'); });
+      setTimeout(function(){
+        if (!got && audioCall===call){
+          $('w-hint').textContent='Aguardando a pessoa liberar o áudio no aparelho dela…';
+        }
+      }, 4000);
+    });
+
+    /* ----- conexão de dados ----- */
+    function onData(d){
+      if (!d) return;
+      if (d.t==='end'){ ended=true; setStatus('O compartilhamento foi encerrado.','err'); $('w-hint').textContent='A pessoa parou de compartilhar.'; return; }
+      if (d.t!=='pos') return;
+      lastMsg = Date.now();
+      $('w-dist').textContent = fmtKm(d.dist||0);
+      $('w-time').textContent = fmtTime(d.dur||0);
+      wLine.setLatLngs((d.trail||[]).map(function(r){ return [r[0],r[1]]; }));
+      if (d.lat!=null && d.lng!=null){
+        hostFix = { lat:d.lat, lng:d.lng, acc:d.acc||0 };
+        var ll=[d.lat,d.lng];
+        if (!wMarker) wMarker=L.marker(ll,{icon:otherIcon,zIndexOffset:1000}).addTo(map); else wMarker.setLatLng(ll);
+        if (firstFit){ map.setView(ll,16); firstFit=false; } else if (wFollow) map.panTo(ll,{animate:true});
+        renderProx();
+        setStatus('Acompanhando ao vivo','on');
+      } else {
+        setStatus('Conectado. Aguardando o GPS da pessoa…','share');
+      }
+      $('w-hint').textContent='Você está acompanhando uma localização compartilhada ao vivo.';
+    }
+
+    function connect(){
+      if (ended) return;
+      if (typeof Peer==='undefined'){ setStatus('Módulo de conexão indisponível. Verifique a internet.','err'); return; }
+      if (peer){ try{ peer.destroy(); }catch(e){} }
+      peer = new Peer(PEER_OPTS);
+      peer.on('open', function(){
+        conn = peer.connect(code, { reliable:true });
+        var timeout = setTimeout(function(){
+          if (!conn.open && !ended){ setStatus('Não foi possível conectar. A pessoa está com o compartilhamento ligado?','err'); $('w-hint').textContent='Confirme que ela deixou a aba aberta e o compartilhamento ativo.'; scheduleRetry(); }
+        }, 15000);
+        conn.on('open', function(){ clearTimeout(timeout); retry=0; setStatus('Conectado. Aguardando posição…','share'); if (myFix){ try{conn.send({t:'loc',lat:myFix.lat,lng:myFix.lng,acc:myFix.acc});}catch(e){} } });
+        conn.on('data', onData);
+        conn.on('close', function(){ if (!ended){ setStatus('Conexão perdida. Reconectando…','err'); scheduleRetry(); } });
+        conn.on('error', function(){ if (!ended){ setStatus('Erro na conexão. Reconectando…','err'); scheduleRetry(); } });
+      });
+      peer.on('error', function(err){
+        var t = err && err.type;
+        if (t==='peer-unavailable'){ setStatus('Compartilhamento não encontrado. A pessoa parou ou fechou a página.','err'); $('w-hint').textContent='Peça um novo link.'; scheduleRetry(); }
+        else { setStatus('Erro de conexão ('+(t||'desconhecido')+'). Tentando de novo…','err'); scheduleRetry(); }
+      });
+    }
+    var retryT=null;
+    function scheduleRetry(){
+      if (ended || retryT) return;
+      retry++;
+      retryT = setTimeout(function(){ retryT=null; connect(); }, Math.min(15000, 3000*retry));
+    }
+    connect();
+  }
+})();
+</script>
+</body>
+</html>
