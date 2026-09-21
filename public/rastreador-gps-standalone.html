@@ -1,0 +1,761 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Rastreador GPS</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📍</text></svg>">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<style>
+  :root{
+    --bg:#f6f7f9; --card:#ffffff; --text:#14171c; --muted:#6b7280;
+    --accent:#2563eb; --accent-2:#1d4ed8; --danger:#dc2626; --ok:#16a34a; --warn:#d97706;
+    --line:#e5e7eb; --shadow:0 8px 30px rgba(0,0,0,.12);
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --bg:#0f1115; --card:#1a1d24; --text:#f3f4f6; --muted:#9ca3af;
+      --accent:#3b82f6; --accent-2:#60a5fa; --danger:#f87171; --ok:#4ade80; --warn:#fbbf24;
+      --line:#2a2f3a; --shadow:0 8px 30px rgba(0,0,0,.5);
+    }
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0}
+  body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;overflow:hidden}
+  #map{position:absolute;inset:0;background:var(--bg)}
+  .leaflet-control-attribution{font-size:9px}
+  @media (prefers-color-scheme: dark){
+    .leaflet-tile-pane{filter:invert(1) hue-rotate(180deg) brightness(.92) contrast(.9) saturate(.8)}
+  }
+  button{font:inherit;font-weight:600;font-size:15px;border:0;cursor:pointer;border-radius:14px;padding:12px 14px;background:var(--accent);color:#fff;transition:transform .05s,background .15s}
+  button:hover{background:var(--accent-2)}
+  button:active{transform:scale(.98)}
+  button.stop{background:var(--danger)}
+  button.ghost{background:var(--bg);color:var(--text);border:1px solid var(--line)}
+  button.ghost:hover{background:var(--line)}
+  button.small{padding:7px 10px;font-size:13px}
+  button:disabled{opacity:.5;cursor:not-allowed}
+  input[type=text]{font:inherit;font-size:14px;padding:10px 12px;border:1px solid var(--line);border-radius:12px;background:var(--card);color:var(--text);min-width:0}
+
+  .top{
+    position:absolute;z-index:1000;top:calc(12px + env(safe-area-inset-top,0px));left:12px;right:12px;
+    max-width:560px;margin:0 auto;display:flex;align-items:center;gap:10px;background:var(--card);
+    border:1px solid var(--line);border-radius:999px;padding:8px 14px;box-shadow:var(--shadow);font-size:13px;
+  }
+  .dot{width:10px;height:10px;border-radius:50%;background:var(--muted);flex:none}
+  .dot.on{background:var(--ok);animation:pulse 1.6s infinite}
+  .dot.err{background:var(--danger)}
+  .dot.share{background:var(--warn)}
+  @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(22,163,74,.6)}70%{box-shadow:0 0 0 10px rgba(22,163,74,0)}100%{box-shadow:0 0 0 0 rgba(22,163,74,0)}}
+  #status{flex:1;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+  .panel{
+    position:absolute;left:12px;right:12px;bottom:calc(12px + env(safe-area-inset-bottom,0px));
+    z-index:1000;max-width:560px;margin:0 auto;background:var(--card);border:1px solid var(--line);
+    border-radius:20px;box-shadow:var(--shadow);padding:14px;max-height:62vh;overflow-y:auto;
+  }
+
+  /* ---------- MONITORADO: botão único ---------- */
+  body.mon #map{display:none}
+  body.mon .panel{
+    position:fixed;inset:0;max-width:none;max-height:none;border:0;border-radius:0;box-shadow:none;margin:0;
+    display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:24px;gap:18px;background:var(--bg);
+  }
+  body.mon .top{display:none}
+  .bigbtn{width:min(78vw,300px);height:min(78vw,300px);border-radius:50%;font-size:22px;font-weight:800;line-height:1.2;
+    box-shadow:0 12px 40px rgba(37,99,235,.45);display:flex;align-items:center;justify-content:center;padding:20px}
+  .bigbtn.stop{box-shadow:0 12px 40px rgba(220,38,38,.45)}
+  .mon-status{font-size:15px;color:var(--muted);max-width:320px;line-height:1.4;min-height:44px}
+  .mon-name{font-size:13px;color:var(--muted)}
+
+  /* ---------- ADMIN ---------- */
+  .adm-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px}
+  .adm-head b{font-size:16px}
+  .add{display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap}
+  .add input{flex:1 1 110px}
+  .list{display:flex;flex-direction:column;gap:8px}
+  .dev{background:var(--bg);border-radius:14px;padding:10px 12px;display:flex;flex-direction:column;gap:8px;border:2px solid transparent}
+  .dev.sel{border-color:var(--accent)}
+  .dev-top{display:flex;align-items:center;gap:8px}
+  .dev-top .nm{flex:1;min-width:0;font-weight:700;font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .badge{font-size:11px;font-weight:700;padding:3px 9px;border-radius:99px;background:var(--line);color:var(--text);white-space:nowrap}
+  .badge.on{background:var(--ok);color:#fff}
+  .badge.wait{background:var(--warn);color:#fff}
+  .badge.off{background:var(--line);color:var(--muted)}
+  .dev-info{font-size:12px;color:var(--muted)}
+  .dev-btns{display:flex;gap:6px;flex-wrap:wrap}
+  .empty{text-align:center;color:var(--muted);font-size:13px;padding:14px 4px}
+  .hint{margin:10px 0 0;font-size:12px;color:var(--muted);line-height:1.4;text-align:center}
+  .colordot{width:12px;height:12px;border-radius:50%;flex:none;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.4)}
+  .pin{width:20px;height:20px;border-radius:50%;border:3px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,.5)}
+  .pinlbl{position:absolute;left:24px;top:-2px;font-size:11px;font-weight:700;background:var(--card);color:var(--text);padding:1px 6px;border-radius:8px;white-space:nowrap;box-shadow:0 1px 4px rgba(0,0,0,.3)}
+  audio{display:none}
+
+  /* ---------- toast ---------- */
+  #toastwrap{position:absolute;z-index:2000;top:calc(64px + env(safe-area-inset-top,0px));left:12px;right:12px;max-width:560px;margin:0 auto;display:flex;flex-direction:column;gap:8px;pointer-events:none}
+  .toast{background:var(--text);color:var(--bg);border-radius:12px;padding:10px 14px;font-size:13px;font-weight:600;box-shadow:var(--shadow);opacity:0;transform:translateY(-8px);transition:opacity .2s,transform .2s}
+  .toast.show{opacity:1;transform:translateY(0)}
+
+  /* ---------- modal (video / history) ---------- */
+  .modal-bg{position:fixed;inset:0;z-index:3000;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:16px}
+  .modal{background:var(--card);border-radius:20px;box-shadow:var(--shadow);max-width:480px;width:100%;max-height:86vh;overflow-y:auto;padding:16px}
+  .modal-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px}
+  .modal-head b{font-size:16px}
+  .modal video{width:100%;border-radius:14px;background:#000;display:block;aspect-ratio:4/3;object-fit:cover}
+  .modal-vidbtns{display:flex;gap:6px;margin-top:10px;flex-wrap:wrap}
+  .hist-item{background:var(--bg);border-radius:12px;padding:10px 12px;margin-bottom:8px;cursor:pointer;border:1px solid var(--line)}
+  .hist-item:active{background:var(--line)}
+  .hist-item .hd{display:flex;justify-content:space-between;font-size:13px;font-weight:700}
+  .hist-item .hs{font-size:12px;color:var(--muted);margin-top:2px}
+  .geo-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:13px}
+  .geo-row label{display:flex;align-items:center;gap:4px;color:var(--muted)}
+  .geo-row input[type=range]{flex:1;min-width:100px}
+  .close-x{background:var(--bg);color:var(--text);border:1px solid var(--line);border-radius:99px;width:30px;height:30px;padding:0;font-size:16px;line-height:1;display:flex;align-items:center;justify-content:center}
+</style>
+</head>
+<body>
+
+<div id="map"></div>
+<div class="top"><span class="dot" id="dot"></span><span id="status">Painel do administrador</span></div>
+<div id="toastwrap"></div>
+<div class="panel" id="panel"></div>
+<audio id="remote-audio" autoplay playsinline></audio>
+<div id="modal-root"></div>
+
+<script>
+(function(){
+  var $ = function(id){ return document.getElementById(id); };
+  function esc(s){ return String(s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];}); }
+  function p2(n){ return (n<10?'0':'')+n; }
+  function fmtDist(m){ return m<1000 ? Math.round(m)+' m' : (m/1000).toFixed(2).replace('.',',')+' km'; }
+  function ago(ts){ var s=Math.max(0,Math.round((Date.now()-ts)/1000)); return s<60 ? s+' s' : (s<3600 ? Math.round(s/60)+' min' : Math.round(s/3600)+' h'); }
+  function haversine(a,b,c,d){
+    var R=6371000, r=Math.PI/180, dLat=(c-a)*r, dLng=(d-b)*r;
+    var x=Math.sin(dLat/2)*Math.sin(dLat/2)+Math.cos(a*r)*Math.cos(c*r)*Math.sin(dLng/2)*Math.sin(dLng/2);
+    return 2*R*Math.asin(Math.sqrt(x));
+  }
+  var dot=$('dot'), statusEl=$('status');
+  function setStatus(t,s){ statusEl.textContent=t; dot.className='dot'+(s?' '+s:''); }
+
+  function toast(msg){
+    var wrap=$('toastwrap'); if (!wrap) return;
+    var el=document.createElement('div'); el.className='toast'; el.textContent=msg;
+    wrap.appendChild(el);
+    requestAnimationFrame(function(){ el.classList.add('show'); });
+    setTimeout(function(){ el.classList.remove('show'); setTimeout(function(){ el.remove(); },300); },4500);
+  }
+
+  var PEER_OPTS = { debug:0, config:{ iceServers:[
+    { urls:'stun:stun.l.google.com:19302' },
+    { urls:'stun:stun1.l.google.com:19302' },
+    { urls:'stun:global.stun.twilio.com:3478' }
+  ]}};
+  // Prefixo para não colidir com outros usuários do servidor público do PeerJS
+  var PREFIX = 'lvgps-';
+
+  var hash = location.hash || '';
+  var mm = /[#&]d=([a-z0-9-]{4,40})/i.exec(hash);
+  if (mm) startMonitored(mm[1].toLowerCase()); else startAdmin();
+
+  /* ============================================================
+     MONITORADO — 1 botão
+  ============================================================ */
+  function startMonitored(code){
+    document.body.classList.add('mon');
+    var name = (decodeURIComponent((/[#&]n=([^&]*)/.exec(hash)||[])[1]||'')) || '';
+    $('panel').innerHTML =
+      '<button class="bigbtn" id="go">Iniciar rastreamento</button>' +
+      '<div class="mon-status" id="ms">Toque para começar. O aparelho vai pedir permissão de localização e microfone.</div>' +
+      '<div class="mon-name">'+(name?esc(name):'')+'</div>';
+
+    var go=$('go'), ms=$('ms');
+    var running=false, watchId=null, peer=null, conns=[], micStream=null, lastFix=null, wake=null, sendT=null, lastSend=0;
+    var camStream=null, camCall=null, camFacing='environment';
+
+    function setMs(t){ ms.textContent=t; }
+
+    function payload(){
+      return { t:'pos', ts:Date.now(), name:name||code,
+        lat:lastFix?lastFix.lat:null, lng:lastFix?lastFix.lng:null, acc:lastFix?lastFix.acc:null,
+        spd:lastFix?lastFix.spd:null, bat:batLevel };
+    }
+    function sendAll(force){
+      var now=Date.now();
+      if (!force && now-lastSend<2000){
+        if (!sendT) sendT=setTimeout(function(){ sendT=null; sendAll(true); }, 2000-(now-lastSend));
+        return;
+      }
+      lastSend=now;
+      var p=payload();
+      conns.forEach(function(c){ try{ if (c.open) c.send(p); }catch(e){} });
+    }
+
+    var batLevel=null;
+    if (navigator.getBattery){ navigator.getBattery().then(function(b){ batLevel=Math.round(b.level*100); b.addEventListener('levelchange',function(){ batLevel=Math.round(b.level*100); }); }).catch(function(){}); }
+
+    function wakeReq(){ if ('wakeLock' in navigator) navigator.wakeLock.request('screen').then(function(l){ wake=l; l.addEventListener('release',function(){ wake=null; }); }).catch(function(){}); }
+    document.addEventListener('visibilitychange',function(){ if (document.visibilityState==='visible' && running && !wake) wakeReq(); });
+
+    function openPeer(){
+      if (peer){ try{ peer.destroy(); }catch(e){} }
+      peer = new Peer(PREFIX+code, PEER_OPTS);
+      peer.on('open',function(){ setMs(lastFix ? 'Rastreamento ativo.' : 'Conectado. Aguardando o GPS…'); });
+      peer.on('connection',function(c){
+        conns.push(c);
+        c.on('open',function(){ sendAll(true); });
+        c.on('data',function(m){
+          if (m && m.t==='switch-cam') switchCam();
+        });
+        var drop=function(){ conns=conns.filter(function(x){ return x!==c; }); };
+        c.on('close',drop); c.on('error',drop);
+      });
+      // O admin "liga" para nós quando quer ouvir ou ver a câmera; atendemos conforme o pedido
+      peer.on('call',function(call){
+        var kind=(call.metadata&&call.metadata.kind)||'audio';
+        if (kind==='video'){
+          openCam(camFacing).then(function(s){
+            call.answer(s);
+            camCall=call;
+            call.on('close',function(){ closeCam(); });
+          }).catch(function(){ try{ call.close(); }catch(e){} });
+        } else {
+          if (!micStream){ try{ call.close(); }catch(e){} return; }
+          call.answer(micStream);
+        }
+      });
+      peer.on('error',function(err){
+        var t=err&&err.type;
+        if (t==='unavailable-id'){
+          setMs('Este código já está em uso em outro aparelho. Feche a outra aba ou use outro código.');
+          stopAll(true);
+        } else if (t==='network'||t==='server-error'||t==='socket-error'||t==='socket-closed'){
+          setMs('Sem conexão com a internet. Tentando reconectar…');
+        } else { setMs('Erro de conexão ('+(t||'desconhecido')+').'); }
+      });
+      peer.on('disconnected',function(){ if (running && peer && !peer.destroyed){ try{ peer.reconnect(); }catch(e){} } });
+    }
+
+    function openCam(facing){
+      if (!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia)) return Promise.reject();
+      if (camStream){ camStream.getTracks().forEach(function(t){ t.stop(); }); camStream=null; }
+      return navigator.mediaDevices.getUserMedia({ video:{ facingMode:facing }, audio:false }).then(function(s){
+        camStream=s; camFacing=facing; return s;
+      });
+    }
+    function closeCam(){
+      if (camStream){ camStream.getTracks().forEach(function(t){ t.stop(); }); camStream=null; }
+      camCall=null;
+    }
+    function switchCam(){
+      if (!camCall) return;
+      var next = camFacing==='environment' ? 'user' : 'environment';
+      openCam(next).then(function(s){
+        var sender = camCall.peerConnection && camCall.peerConnection.getSenders && camCall.peerConnection.getSenders().filter(function(x){ return x.track && x.track.kind==='video'; })[0];
+        if (sender && s.getVideoTracks()[0]) sender.replaceTrack(s.getVideoTracks()[0]);
+      }).catch(function(){});
+    }
+
+    function startAll(){
+      if (typeof Peer==='undefined'){ setMs('Não foi possível carregar o módulo de conexão. Verifique a internet.'); return; }
+      if (!('geolocation' in navigator)){ setMs('Este navegador não suporta localização.'); return; }
+      if (!window.isSecureContext){ setMs('Abra este link por https para o GPS funcionar.'); return; }
+      go.disabled=true; setMs('Pedindo permissões…');
+
+      // 1) microfone (precisa ser no toque do usuário)
+      var micP = (navigator.mediaDevices && navigator.mediaDevices.getUserMedia)
+        ? navigator.mediaDevices.getUserMedia({ audio:{ echoCancellation:true, noiseSuppression:true }, video:false }).then(function(s){ micStream=s; }).catch(function(){ micStream=null; })
+        : Promise.resolve();
+
+      micP.then(function(){
+        // 2) GPS
+        running=true;
+        watchId=navigator.geolocation.watchPosition(function(pos){
+          var c=pos.coords;
+          lastFix={ lat:c.latitude, lng:c.longitude, acc:Math.round(c.accuracy), spd:(c.speed!=null&&!isNaN(c.speed))?Math.round(c.speed*3.6):null };
+          setMs('Rastreamento ativo.'+(micStream?'':' (sem microfone)'));
+          sendAll(false);
+        }, function(e){
+          if (e.code===1){ setMs('Permissão de localização negada. Libere nas configurações do navegador e toque de novo.'); stopAll(true); }
+          else if (e.code===2){ setMs('Localização indisponível. Ligue o GPS.'); }
+          else { setMs('Buscando sinal de GPS…'); }
+        }, { enableHighAccuracy:true, maximumAge:0, timeout:20000 });
+
+        openPeer(); wakeReq();
+        go.disabled=false; go.textContent='Parar rastreamento'; go.classList.add('stop');
+        setMs('Iniciando…'+(micStream?'':' (microfone não liberado)'));
+      });
+    }
+
+    function stopAll(silent){
+      running=false;
+      if (watchId!==null){ navigator.geolocation.clearWatch(watchId); watchId=null; }
+      conns.forEach(function(c){ try{ c.send({t:'end'}); }catch(e){} try{ c.close(); }catch(e){} }); conns=[];
+      if (peer){ try{ peer.destroy(); }catch(e){} peer=null; }
+      if (micStream){ micStream.getTracks().forEach(function(t){ t.stop(); }); micStream=null; }
+      if (camCall){ try{ camCall.close(); }catch(e){} }
+      closeCam();
+      if (wake){ try{ wake.release(); }catch(e){} wake=null; }
+      if (sendT){ clearTimeout(sendT); sendT=null; }
+      lastFix=null;
+      go.disabled=false; go.textContent='Iniciar rastreamento'; go.classList.remove('stop');
+      if (!silent) setMs('Rastreamento parado.');
+    }
+
+    go.addEventListener('click',function(){ running ? stopAll() : startAll(); });
+    window.addEventListener('pagehide',function(){ if (running) stopAll(true); });
+  }
+
+  /* ============================================================
+     ADMIN — mapa com todos os dispositivos
+  ============================================================ */
+  function startAdmin(){
+    var map = L.map('map',{ zoomControl:false }).setView([-14.235,-51.925],4);
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{ maxZoom:19, attribution:'© OpenStreetMap' }).addTo(map);
+
+    var LS='lvgps_devices_v1';
+    var LS_GEO='lvgps_geofences_v1';
+    var LS_HIST='lvgps_history_v1';
+    var HIST_MAX=20;
+    var COLORS=['#2563eb','#dc2626','#16a34a','#d97706','#9333ea','#0891b2','#db2777','#65a30d'];
+    function load(){ try{ return JSON.parse(localStorage.getItem(LS)||'[]'); }catch(e){ return []; } }
+    function save(a){ try{ localStorage.setItem(LS,JSON.stringify(a)); }catch(e){} }
+    function loadGeo(){ try{ return JSON.parse(localStorage.getItem(LS_GEO)||'{}'); }catch(e){ return {}; } }
+    function saveGeo(o){
+      try{
+        var plain={};
+        Object.keys(o).forEach(function(code){
+          var g=o[code];
+          plain[code]={ lat:g.lat, lng:g.lng, radius:g.radius, onEnter:g.onEnter, onExit:g.onExit, label:g.label };
+        });
+        localStorage.setItem(LS_GEO,JSON.stringify(plain));
+      }catch(e){}
+    }
+    function loadHist(){ try{ return JSON.parse(localStorage.getItem(LS_HIST)||'{}'); }catch(e){ return {}; } }
+    function saveHist(o){ try{ localStorage.setItem(LS_HIST,JSON.stringify(o)); }catch(e){} }
+    var devices = load();   // [{code,name,color}]
+    var st = {};            // code -> {conn, state:'off'|'wait'|'on', fix, lastMsg, marker, trail, line, audioCall, retryT, retry, selected}
+    var geofences = loadGeo();  // code -> {lat,lng,radius,onEnter,onExit,inside:null|true|false,circle}
+    Object.keys(geofences).forEach(function(code){ geofences[code].inside=null; geofences[code].circle=null; });
+    var histories = loadHist(); // code -> [{start,end,dist,points:[[lat,lng],...]}]
+    var selected=null, adminPeer=null, peerReady=false;
+    var audioEl=$('remote-audio');
+    var geoPickMode=null; // code currently waiting for a map tap to set geofence center
+    var activeCamCall=null;
+
+    function ensureSt(code){ if (!st[code]) st[code]={ state:'off', fix:null, lastMsg:0, marker:null, retry:0 }; return st[code]; }
+
+    /* ----- modal helpers ----- */
+    function openModal(html){
+      var root=$('modal-root');
+      root.innerHTML='<div class="modal-bg" id="modal-bg"><div class="modal">'+html+'</div></div>';
+      $('modal-bg').addEventListener('click',function(e){ if (e.target.id==='modal-bg') closeModal(); });
+      return root;
+    }
+    function closeModal(){ $('modal-root').innerHTML=''; }
+
+    /* ----- histórico de trajetos ----- */
+    function histFor(code){ if (!histories[code]) histories[code]=[]; return histories[code]; }
+    function startSession(code){
+      var s=ensureSt(code);
+      s.session={ start:Date.now(), points: s.fix?[[s.fix.lat,s.fix.lng]]:[] };
+    }
+    function pushSessionPoint(code,lat,lng){
+      var s=st[code]; if (!s||!s.session) return;
+      var pts=s.session.points, last=pts[pts.length-1];
+      if (!last || haversine(last[0],last[1],lat,lng)>=3) pts.push([lat,lng]);
+    }
+    function endSession(code){
+      var s=st[code]; if (!s||!s.session) return;
+      var sess=s.session; s.session=null;
+      if (sess.points.length<2 && Date.now()-sess.start<15000) return; // sessão vazia/curta demais, ignora
+      var dist=0;
+      for (var i=1;i<sess.points.length;i++) dist+=haversine(sess.points[i-1][0],sess.points[i-1][1],sess.points[i][0],sess.points[i][1]);
+      var arr=histFor(code);
+      arr.unshift({ start:sess.start, end:Date.now(), dist:dist, points:sess.points });
+      if (arr.length>HIST_MAX) arr.length=HIST_MAX;
+      saveHist(histories);
+    }
+    function fmtDateTime(ts){
+      var d=new Date(ts);
+      return p2(d.getDate())+'/'+p2(d.getMonth()+1)+' '+p2(d.getHours())+':'+p2(d.getMinutes());
+    }
+    function fmtDur(ms){
+      var s=Math.round(ms/1000);
+      if (s<60) return s+' s';
+      var m=Math.round(s/60);
+      if (m<60) return m+' min';
+      var h=Math.floor(m/60), mm=m%60;
+      return h+'h'+(mm?p2(mm):'');
+    }
+    var histLayer=null;
+    function showHistory(code){
+      var d=devices.filter(function(x){ return x.code===code; })[0]; if (!d) return;
+      var arr=histFor(code);
+      var body = !arr.length
+        ? '<div class="empty">Nenhum trajeto salvo ainda para '+esc(d.name)+'.</div>'
+        : arr.map(function(sess,i){
+            return '<div class="hist-item" data-i="'+i+'">'+
+              '<div class="hd"><span>'+fmtDateTime(sess.start)+'</span><span>'+fmtDur(sess.end-sess.start)+'</span></div>'+
+              '<div class="hs">'+fmtDist(sess.dist)+' percorridos · '+sess.points.length+' pontos</div>'+
+            '</div>';
+          }).join('');
+      var root=openModal(
+        '<div class="modal-head"><b>🕘 Histórico — '+esc(d.name)+'</b><button class="close-x" id="mx">✕</button></div>'+
+        '<div id="hist-list">'+body+'</div>'
+      );
+      $('mx').addEventListener('click',closeModal);
+      root.querySelectorAll('.hist-item').forEach(function(el){
+        el.addEventListener('click',function(){
+          var sess=arr[+el.dataset.i];
+          drawHistoryTrail(d,sess);
+          closeModal();
+        });
+      });
+    }
+    function drawHistoryTrail(d,sess){
+      if (histLayer){ map.removeLayer(histLayer); histLayer=null; }
+      if (!sess.points.length) return;
+      histLayer=L.polyline(sess.points,{ color:d.color, weight:4, opacity:.55, dashArray:'2 8' }).addTo(map);
+      map.fitBounds(histLayer.getBounds(),{ padding:[60,60] });
+      setStatus('Trajeto de '+d.name+' em '+fmtDateTime(sess.start)+'.','');
+    }
+
+    /* ----- alerta de área (geofence) ----- */
+    function geoFor(code){ return geofences[code]||null; }
+    function drawGeoCircle(code){
+      var g=geoFor(code); if (!g) return;
+      if (g.circle){ map.removeLayer(g.circle); }
+      var d=devices.filter(function(x){ return x.code===code; })[0];
+      g.circle=L.circle([g.lat,g.lng],{ radius:g.radius, color:d?d.color:'#2563eb', weight:2, fillOpacity:.08 }).addTo(map);
+    }
+    function removeGeoCircle(code){
+      var g=geoFor(code); if (g&&g.circle){ map.removeLayer(g.circle); g.circle=null; }
+    }
+    function checkGeofence(code,lat,lng){
+      var g=geoFor(code); if (!g) return;
+      var d=devices.filter(function(x){ return x.code===code; })[0]; if (!d) return;
+      var dist=haversine(lat,lng,g.lat,g.lng);
+      var isIn=dist<=g.radius;
+      if (g.inside===null){ g.inside=isIn; return; } // primeira leitura, só grava o estado
+      if (isIn && !g.inside && g.onEnter) toast('📍 '+d.name+' chegou em '+(g.label||'área marcada'));
+      if (!isIn && g.inside && g.onExit) toast('📍 '+d.name+' saiu de '+(g.label||'área marcada'));
+      g.inside=isIn;
+    }
+    function openGeoModal(code){
+      var d=devices.filter(function(x){ return x.code===code; })[0]; if (!d) return;
+      var g=geoFor(code);
+      var radius=g?g.radius:150;
+      var onEnter=g?g.onEnter:true, onExit=g?g.onExit:true;
+      var root=openModal(
+        '<div class="modal-head"><b>🎯 Alerta de área — '+esc(d.name)+'</b><button class="close-x" id="mx">✕</button></div>'+
+        (g
+          ? '<p class="hint" style="margin-top:0">Área marcada com raio de <b id="rlbl">'+g.radius+' m</b>.</p>'
+          : '<p class="hint" style="margin-top:0">Toque no mapa para marcar o centro da área. Depois ajuste o raio e escolha quando avisar.</p>'
+        )+
+        '<div class="geo-row" style="margin:10px 0"><label>Raio</label><input type="range" id="grad" min="30" max="2000" step="10" value="'+radius+'"><span id="rval">'+radius+' m</span></div>'+
+        '<div class="geo-row" style="margin-bottom:12px">'+
+          '<label><input type="checkbox" id="gin" '+(onEnter?'checked':'')+'> Avisar ao chegar</label>'+
+          '<label><input type="checkbox" id="gout" '+(onExit?'checked':'')+'> Avisar ao sair</label>'+
+        '</div>'+
+        '<div class="modal-vidbtns">'+
+          '<button id="gpick">'+(g?'📍 Remarcar centro no mapa':'📍 Marcar centro no mapa')+'</button>'+
+          (g?'<button class="ghost" id="gdel">🗑 Remover alerta</button>':'')+
+        '</div>'
+      );
+      $('mx').addEventListener('click',closeModal);
+      var radEl=$('grad'), rval=$('rval');
+      radEl.addEventListener('input',function(){ rval.textContent=radEl.value+' m'; if (geoFor(code)){ geoFor(code).radius=+radEl.value; drawGeoCircle(code); } saveGeo(geofences); });
+      $('gin').addEventListener('change',function(){ if (geoFor(code)){ geoFor(code).onEnter=$('gin').checked; saveGeo(geofences); } });
+      $('gout').addEventListener('change',function(){ if (geoFor(code)){ geoFor(code).onExit=$('gout').checked; saveGeo(geofences); } });
+      $('gpick').addEventListener('click',function(){
+        geoPickMode={ code:code, radius:+radEl.value, onEnter:$('gin').checked, onExit:$('gout').checked };
+        closeModal();
+        setStatus('Toque no mapa para marcar o centro da área de '+d.name+'.','share');
+      });
+      var delBtn=$('gdel');
+      if (delBtn) delBtn.addEventListener('click',function(){
+        removeGeoCircle(code); delete geofences[code]; saveGeo(geofences);
+        closeModal(); renderList(); setStatus('Alerta de área removido.','');
+      });
+    }
+    map.on('click',function(e){
+      if (!geoPickMode) return;
+      var code=geoPickMode.code, d=devices.filter(function(x){ return x.code===code; })[0];
+      geofences[code]={ lat:e.latlng.lat, lng:e.latlng.lng, radius:geoPickMode.radius, onEnter:geoPickMode.onEnter, onExit:geoPickMode.onExit, inside:null, circle:null, label:d?d.name:code };
+      saveGeo(geofences);
+      drawGeoCircle(code);
+      geoPickMode=null;
+      renderList();
+      setStatus('Área marcada para '+(d?d.name:code)+'.','on');
+    });
+
+    /* ----- ver no Maps / ver câmera ----- */
+    function openInMaps(code){
+      var s=st[code]; if (!s||!s.fix){ setStatus('Ainda sem localização deste dispositivo.','err'); return; }
+      window.open('https://www.google.com/maps?q='+s.fix.lat+','+s.fix.lng,'_blank');
+    }
+    var camCode=null, camDummyCtx=null;
+    function toggleCamera(code){
+      if (camCode===code){ stopCamera(); renderList(); return; }
+      var s=st[code];
+      if (!adminPeer || !peerReady || !s || s.state!=='on'){ setStatus('Este dispositivo não está conectado.','err'); return; }
+      stopCamera();
+      // fluxo mudo só para abrir a chamada, igual ao padrão do áudio
+      var AC=window.AudioContext||window.webkitAudioContext;
+      camDummyCtx=new AC();
+      var dest=camDummyCtx.createMediaStreamDestination();
+      var call=adminPeer.call(PREFIX+code, dest.stream, { metadata:{ kind:'video' } });
+      camCode=code;
+      var d=devices.filter(function(x){ return x.code===code; })[0];
+      var root=openModal(
+        '<div class="modal-head"><b>📷 Câmera — '+esc(d?d.name:code)+'</b><button class="close-x" id="mx">✕</button></div>'+
+        '<video id="remote-video-el" autoplay playsinline></video>'+
+        '<div class="modal-vidbtns"><button class="ghost" id="camflip">🔄 Trocar câmera</button></div>'+
+        '<div class="mon-status" id="camstatus" style="min-height:0;margin-top:8px">Conectando…</div>'
+      );
+      $('mx').addEventListener('click',function(){ stopCamera(); closeModal(); renderList(); });
+      var vidEl=$('remote-video-el');
+      var got=false;
+      call.on('stream',function(remote){ got=true; vidEl.srcObject=remote; vidEl.play().catch(function(){}); var cs=$('camstatus'); if (cs) cs.textContent='Ao vivo.'; renderList(); });
+      call.on('close',function(){ var cs=$('camstatus'); if (cs&&!got) cs.textContent='O aparelho não liberou a câmera.'; if (camCode===code){ camCode=null; } renderList(); });
+      call.on('error',function(){ var cs=$('camstatus'); if (cs) cs.textContent='Falha ao abrir a câmera.'; stopCamera(); renderList(); });
+      $('camflip').addEventListener('click',function(){
+        var s2=st[code]; if (s2&&s2.conn&&s2.conn.open) s2.conn.send({ t:'switch-cam' });
+      });
+      activeCamCall=call;
+      setTimeout(function(){ if (!got && camCode===code){ var cs=$('camstatus'); if (cs) cs.textContent='Aguardando o aparelho responder…'; } },4000);
+      renderList();
+    }
+    function stopCamera(){
+      if (activeCamCall){ try{ activeCamCall.close(); }catch(e){} activeCamCall=null; }
+      if (camDummyCtx){ try{ camDummyCtx.close(); }catch(e){} camDummyCtx=null; }
+      camCode=null;
+    }
+
+    function pinIcon(color,name){
+      return L.divIcon({ className:'', iconSize:[20,20], iconAnchor:[10,10],
+        html:'<div style="position:relative"><div class="pin" style="background:'+color+'"></div><div class="pinlbl">'+esc(name)+'</div></div>' });
+    }
+
+    /* ----- painel ----- */
+    $('panel').innerHTML =
+      '<div class="adm-head"><b>📡 Dispositivos</b><button class="ghost small" id="fit">Ver todos</button></div>' +
+      '<div class="add"><input type="text" id="in-name" placeholder="Nome (ex.: Celular do João)" maxlength="30">' +
+      '<input type="text" id="in-code" placeholder="Código (ex.: joao)" maxlength="30" autocapitalize="none" autocorrect="off">' +
+      '<button id="btn-add">Adicionar</button></div>' +
+      '<div class="list" id="list"></div>' +
+      '<p class="hint" id="adm-hint">Adicione um dispositivo, copie o link dele e envie. Quando a pessoa tocar em <b>Iniciar rastreamento</b>, ele aparece aqui. Use <b>🎯 Área</b> para ser avisado quando alguém chegar ou sair de um lugar, e <b>🕘 Histórico</b> para rever trajetos de sessões anteriores.</p>';
+
+    function cleanCode(s){ return String(s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9-]/g,'-').replace(/-+/g,'-').replace(/^-+|-+$/g,'').slice(0,30); }
+    function linkFor(d){ return location.href.split('#')[0] + '#d=' + d.code + '&n=' + encodeURIComponent(d.name); }
+
+    $('btn-add').addEventListener('click',function(){
+      var nm=$('in-name').value.trim(), cd=cleanCode($('in-code').value || nm);
+      if (!nm){ setStatus('Dê um nome ao dispositivo.','err'); return; }
+      if (cd.length<4){ setStatus('O código precisa ter pelo menos 4 letras/números (para ninguém adivinhar).','err'); return; }
+      if (devices.some(function(d){ return d.code===cd; })){ setStatus('Já existe um dispositivo com esse código.','err'); return; }
+      var d={ code:cd, name:nm, color:COLORS[devices.length%COLORS.length] };
+      devices.push(d); save(devices);
+      $('in-name').value=''; $('in-code').value='';
+      setStatus('Dispositivo adicionado. Copie o link e envie para a pessoa.','on');
+      renderList(); connectDevice(d);
+    });
+
+    function removeDevice(code){
+      var s=st[code]; if (s){ stopAudio(code); endSession(code); if (s.conn){ try{s.conn.close();}catch(e){} } if (s.retryT) clearTimeout(s.retryT); if (s.marker) map.removeLayer(s.marker); if (s.line) map.removeLayer(s.line); delete st[code]; }
+      if (camCode===code) { stopCamera(); closeModal(); }
+      removeGeoCircle(code); delete geofences[code]; saveGeo(geofences);
+      devices=devices.filter(function(d){ return d.code!==code; }); save(devices);
+      if (selected===code) selected=null;
+      renderList();
+    }
+
+    var badgeMap={ on:['on','Ao vivo'], wait:['wait','Conectando…'], off:['off','Offline'] };
+    function renderList(){
+      var el=$('list'); el.innerHTML='';
+      if (!devices.length){ el.innerHTML='<div class="empty">Nenhum dispositivo ainda.</div>'; return; }
+      devices.forEach(function(d){
+        var s=ensureSt(d.code), b=badgeMap[s.state];
+        var row=document.createElement('div'); row.className='dev'+(selected===d.code?' sel':''); row.id='dev-'+d.code;
+        var top=document.createElement('div'); top.className='dev-top';
+        var cd=document.createElement('span'); cd.className='colordot'; cd.style.background=d.color;
+        var nm=document.createElement('span'); nm.className='nm'; nm.textContent=d.name;
+        var bd=document.createElement('span'); bd.className='badge '+b[0]; bd.textContent=b[1];
+        top.appendChild(cd); top.appendChild(nm); top.appendChild(bd);
+        var info=document.createElement('div'); info.className='dev-info'; info.id='info-'+d.code; info.textContent=infoText(d,s);
+        var btns=document.createElement('div'); btns.className='dev-btns';
+        var bLoc=mk('📍 Localizar','ghost small',function(){ focusDev(d.code); });
+        var bMaps=mk('🗺 Ver no Maps','ghost small',function(){ openInMaps(d.code); }); bMaps.disabled=!s.fix;
+        var bAud=mk(s.audioCall?'🔇 Parar áudio':'🎧 Ouvir','ghost small',function(){ toggleAudio(d.code); }); bAud.id='aud-'+d.code; bAud.disabled=s.state!=='on';
+        var bCam=mk(camCode===d.code?'🔴 Parar câmera':'📷 Câmera','ghost small',function(){ toggleCamera(d.code); }); bCam.id='cam-'+d.code; bCam.disabled=s.state!=='on';
+        var bGeo=mk(geoFor(d.code)?'🎯 Área ✓':'🎯 Área','ghost small',function(){ openGeoModal(d.code); });
+        var bHist=mk('🕘 Histórico','ghost small',function(){ showHistory(d.code); });
+        var bLnk=mk('🔗 Link','ghost small',function(){ copyLink(d,bLnk); });
+        var bDel=mk('🗑','ghost small',function(){
+          if (bDel.dataset.sure!=='1'){ bDel.dataset.sure='1'; bDel.textContent='Apagar?'; setTimeout(function(){ bDel.dataset.sure=''; bDel.textContent='🗑'; },3000); return; }
+          removeDevice(d.code);
+        });
+        btns.appendChild(bLoc); btns.appendChild(bMaps); btns.appendChild(bAud); btns.appendChild(bCam);
+        btns.appendChild(bGeo); btns.appendChild(bHist); btns.appendChild(bLnk); btns.appendChild(bDel);
+        row.appendChild(top); row.appendChild(info); row.appendChild(btns);
+        el.appendChild(row);
+      });
+    }
+    function mk(t,c,fn){ var b=document.createElement('button'); b.className=c; b.textContent=t; b.addEventListener('click',fn); return b; }
+    function infoText(d,s){
+      if (s.state==='off') return 'Aguardando a pessoa tocar em Iniciar rastreamento.';
+      if (!s.fix) return s.state==='wait' ? 'Conectando ao aparelho…' : 'Conectado. Aguardando o GPS…';
+      var t='Atualizado há '+ago(s.lastMsg);
+      if (s.fix.acc!=null) t+=' · ±'+s.fix.acc+' m';
+      if (s.fix.spd!=null) t+=' · '+s.fix.spd+' km/h';
+      if (s.fix.bat!=null) t+=' · 🔋'+s.fix.bat+'%';
+      return t;
+    }
+    function copyLink(d,btn){
+      var url=linkFor(d);
+      var done=function(){ btn.textContent='Copiado!'; setTimeout(function(){ btn.textContent='🔗 Link'; },1500); };
+      if (navigator.clipboard&&navigator.clipboard.writeText) navigator.clipboard.writeText(url).then(done,function(){ fallbackCopy(url,done); });
+      else fallbackCopy(url,done);
+      if (navigator.share){ navigator.share({ title:'Rastreador', text:'Abra e toque em Iniciar rastreamento:', url:url }).catch(function(){}); }
+    }
+    function fallbackCopy(t,done){ var i=document.createElement('input'); i.value=t; document.body.appendChild(i); i.select(); try{document.execCommand('copy');done();}catch(e){} document.body.removeChild(i); }
+
+    function focusDev(code){
+      selected=code; renderList();
+      var s=st[code];
+      if (s && s.marker){ map.setView(s.marker.getLatLng(),Math.max(map.getZoom(),16)); }
+      else setStatus('Ainda sem localização deste dispositivo.','err');
+    }
+    $('fit').addEventListener('click',function(){
+      var pts=[]; devices.forEach(function(d){ var s=st[d.code]; if (s&&s.marker) pts.push(s.marker.getLatLng()); });
+      if (!pts.length){ setStatus('Nenhum dispositivo com localização ainda.','err'); return; }
+      if (pts.length===1) map.setView(pts[0],16); else map.fitBounds(L.latLngBounds(pts),{padding:[60,60]});
+    });
+
+    /* ----- conexão com cada dispositivo ----- */
+    function ensureAdminPeer(cb){
+      if (adminPeer && !adminPeer.destroyed && peerReady){ cb(); return; }
+      if (typeof Peer==='undefined'){ setStatus('Módulo de conexão indisponível. Verifique a internet.','err'); return; }
+      if (!adminPeer || adminPeer.destroyed){
+        adminPeer = new Peer(PEER_OPTS);
+        adminPeer.on('open',function(){ peerReady=true; setStatus('Painel conectado','on'); devices.forEach(connectDevice); });
+        adminPeer.on('disconnected',function(){ peerReady=false; try{ adminPeer.reconnect(); }catch(e){} });
+        adminPeer.on('error',function(err){
+          var t=err&&err.type;
+          if (t==='peer-unavailable') return;   // tratado por dispositivo
+          setStatus('Erro de conexão ('+(t||'desconhecido')+'). Tentando de novo…','err');
+        });
+      }
+    }
+
+    function connectDevice(d){
+      var s=ensureSt(d.code);
+      if (!adminPeer || !peerReady){ ensureAdminPeer(function(){}); return; }
+      if (s.conn && s.conn.open) return;
+      if (s.state==='wait') return;
+      s.state='wait'; updateRow(d.code);
+      var conn=adminPeer.connect(PREFIX+d.code,{ reliable:true });
+      s.conn=conn;
+      var to=setTimeout(function(){ if (!conn.open) failDevice(d.code,conn); },12000);
+      conn.on('open',function(){ clearTimeout(to); s.retry=0; s.state='on'; updateRow(d.code); });
+      conn.on('data',function(m){ onDeviceData(d,m); });
+      conn.on('close',function(){ clearTimeout(to); failDevice(d.code,conn); });
+      conn.on('error',function(){ clearTimeout(to); failDevice(d.code,conn); });
+    }
+    function failDevice(code,conn){
+      var s=st[code]; if (!s) return;
+      if (s.conn!==conn && s.conn) return;
+      try{ if (conn) conn.close(); }catch(e){}
+      s.conn=null; s.state='off'; stopAudio(code); endSession(code);
+      if (s.marker) s.marker.setOpacity(.45);
+      updateRow(code);
+      // tenta de novo com espera crescente (a pessoa pode ainda não ter tocado em Iniciar)
+      if (s.retryT) clearTimeout(s.retryT);
+      s.retry=(s.retry||0)+1;
+      var wait=Math.min(20000, 4000+s.retry*2000);
+      s.retryT=setTimeout(function(){ s.retryT=null; var d=devices.filter(function(x){ return x.code===code; })[0]; if (d) connectDevice(d); }, wait);
+    }
+    function updateRow(code){
+      var d=devices.filter(function(x){ return x.code===code; })[0]; if (!d) return;
+      var s=st[code], row=$('dev-'+code); if (!row) return;
+      var b=badgeMap[s.state];
+      var bd=row.querySelector('.badge'); if (bd){ bd.className='badge '+b[0]; bd.textContent=b[1]; }
+      var inf=$('info-'+code); if (inf) inf.textContent=infoText(d,s);
+      var au=$('aud-'+code); if (au) au.disabled=s.state!=='on';
+      var cm=$('cam-'+code); if (cm) cm.disabled=s.state!=='on';
+    }
+
+    function onDeviceData(d,m){
+      var s=ensureSt(d.code);
+      if (!m) return;
+      if (m.t==='end'){ s.state='off'; s.fix=null; if (s.marker) s.marker.setOpacity(.45); stopAudio(d.code); endSession(d.code); updateRow(d.code); setStatus(d.name+' parou o rastreamento.',''); return; }
+      if (m.t!=='pos') return;
+      var wasOn = s.state==='on';
+      s.lastMsg=Date.now();
+      if (m.lat!=null && m.lng!=null){
+        s.fix={ lat:m.lat, lng:m.lng, acc:m.acc, spd:m.spd, bat:m.bat };
+        var ll=[m.lat,m.lng];
+        if (!s.marker){
+          s.marker=L.marker(ll,{ icon:pinIcon(d.color,d.name), zIndexOffset:500 }).addTo(map);
+          s.line=L.polyline([ll],{ color:d.color, weight:4, opacity:.8 }).addTo(map);
+          var any=devices.filter(function(x){ var q=st[x.code]; return q&&q.marker&&x.code!==d.code; }).length;
+          if (!any) map.setView(ll,16);
+        } else {
+          s.marker.setLatLng(ll); s.marker.setOpacity(1);
+          var last=s.line.getLatLngs(); var lp=last[last.length-1];
+          if (!lp || haversine(lp.lat,lp.lng,m.lat,m.lng)>=3){ s.line.addLatLng(ll); if (last.length>1500) s.line.setLatLngs(last.slice(-1500)); }
+        }
+        if (!s.session) startSession(d.code);
+        pushSessionPoint(d.code,m.lat,m.lng);
+        checkGeofence(d.code,m.lat,m.lng);
+      } else { s.fix=null; }
+      s.state='on';
+      if (!wasOn && !s.session) startSession(d.code);
+      updateRow(d.code);
+      if (selected===d.code && s.marker) map.panTo(s.marker.getLatLng(),{animate:true});
+      var live=devices.filter(function(x){ return st[x.code]&&st[x.code].state==='on'; }).length;
+      setStatus(live+' de '+devices.length+' dispositivo'+(devices.length===1?'':'s')+' ao vivo','on');
+    }
+
+    /* ----- áudio ----- */
+    function toggleAudio(code){
+      var s=st[code]; if (!s) return;
+      if (s.audioCall){ stopAudio(code); renderList(); return; }
+      if (!adminPeer || !peerReady || s.state!=='on'){ setStatus('Este dispositivo não está conectado.','err'); return; }
+      // só um áudio por vez
+      devices.forEach(function(d){ if (d.code!==code) stopAudio(d.code); });
+      var AC=window.AudioContext||window.webkitAudioContext;
+      var ctx=new AC(), dest=ctx.createMediaStreamDestination();   // fluxo mudo só para abrir a chamada
+      var call=adminPeer.call(PREFIX+code, dest.stream);
+      s.audioCall=call; s.audioCtx=ctx;
+      var got=false;
+      call.on('stream',function(remote){ got=true; audioEl.srcObject=remote; audioEl.play().catch(function(){}); setStatus('Ouvindo '+nameOf(code),'on'); renderList(); });
+      call.on('close',function(){ if (!got) setStatus('O aparelho não liberou o microfone.','err'); stopAudio(code); renderList(); });
+      call.on('error',function(){ setStatus('Falha ao ouvir o áudio.','err'); stopAudio(code); renderList(); });
+      renderList();
+      setTimeout(function(){ if (!got && s.audioCall===call){ setStatus('Aguardando o aparelho responder ao áudio…','share'); } },4000);
+    }
+    function stopAudio(code){
+      var s=st[code]; if (!s||!s.audioCall) return;
+      try{ s.audioCall.close(); }catch(e){}
+      s.audioCall=null;
+      if (s.audioCtx){ try{ s.audioCtx.close(); }catch(e){} s.audioCtx=null; }
+      audioEl.srcObject=null;
+    }
+    function nameOf(code){ var d=devices.filter(function(x){ return x.code===code; })[0]; return d?d.name:code; }
+
+    /* ----- ciclo de vida ----- */
+    setInterval(function(){ devices.forEach(function(d){ var s=st[d.code]; if (s&&s.state==='on'){ var inf=$('info-'+d.code); if (inf) inf.textContent=infoText(d,s); if (Date.now()-s.lastMsg>20000 && s.marker) s.marker.setOpacity(.5); } }); },1000);
+    window.addEventListener('pagehide',function(){ devices.forEach(function(d){ stopAudio(d.code); }); });
+
+    renderList();
+    Object.keys(geofences).forEach(function(code){ if (devices.some(function(d){ return d.code===code; })) drawGeoCircle(code); });
+    ensureAdminPeer(function(){});
+    if (!devices.length) setStatus('Adicione o primeiro dispositivo','');
+  }
+})();
+</script>
+</body>
+</html>
